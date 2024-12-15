@@ -25,6 +25,8 @@ const BASE_URI_KEY = stringToBytes('BASE_URI');
 const COUNTER_KEY = stringToBytes('COUNTER');
 const MAX_SUPPLY_KEY = stringToBytes('MAX_SUPPLY');
 const ITEM_TYPE_KEY = 'ITEM_METADATA:';
+const TOKEN_OWNER_KEY = 'TOKEN_OWNER:';
+const BALANCE_KEY = 'BALANCE:';
 
 // Default NFT properties
 const DEFAULT_XP = 0;
@@ -32,7 +34,7 @@ const DEFAULT_MAG = 0;
 const DEFAULT_CONDITION = 100;
 
 // Limits
-const ITEM_MAX_SUPPLY = u256.fromU32(5000);
+const ITEM_MAX_SUPPLY = u256.fromU32(50000);
 
 // Item Prices
 const ITEM_PRICES: Map<string, u64> = new Map<string, u64>();
@@ -41,6 +43,10 @@ ITEM_PRICES.set('MagLum', 100);
 ITEM_PRICES.set('NanoShelter', 350);
 ITEM_PRICES.set('CrystalCondenser', 150);
 ITEM_PRICES.set('CrystalSynthesizer', 500);
+
+/** ERC-165 Interface IDs */
+const ERC721_INTERFACE_ID = '0x80ac58cd';
+const ERC165_INTERFACE_ID = '0x01ffc9a7';
 
 /**
  * Constructor function to initialize the NFT contract
@@ -58,6 +64,17 @@ export function constructor(binaryArgs: StaticArray<u8>): void {
   Storage.set(MAX_SUPPLY_KEY, u256ToBytes(ITEM_MAX_SUPPLY));
   Storage.set(COUNTER_KEY, u256ToBytes(u256.Zero));
   generateEvent('NFT Collection Deployed');
+}
+
+/**
+ * ERC-165: Check interface support
+ */
+export function supportsInterface(binaryArgs: StaticArray<u8>): StaticArray<u8> {
+  const args = new Args(binaryArgs);
+  const interfaceId = args.nextString().expect('Interface ID missing.');
+  const supported =
+    interfaceId == ERC721_INTERFACE_ID || interfaceId == ERC165_INTERFACE_ID;
+  return new Args().add(supported).serialize();
 }
 
 /**
@@ -84,15 +101,19 @@ export function mintItem(binaryArgs: StaticArray<u8>): void {
 
   // Increment counter
   const currentSupply = bytesToU256(Storage.get(COUNTER_KEY));
-  assert(currentSupply <= ITEM_MAX_SUPPLY, 'Max supply reached.');
+  assert(currentSupply < ITEM_MAX_SUPPLY, 'Max supply reached.');
   const newSupply = currentSupply + u256.One;
-
   Storage.set(COUNTER_KEY, u256ToBytes(newSupply));
 
-  // Store default metadata
+  // Store metadata
   const metadataKey = ITEM_TYPE_KEY + newSupply.toString();
   const metadata = generateMetadata(itemType);
   Storage.set(stringToBytes(metadataKey), stringToBytes(metadata));
+
+  // Assign ownership
+  const ownerKey = TOKEN_OWNER_KEY + newSupply.toString();
+  Storage.set(stringToBytes(ownerKey), stringToBytes(to));
+  incrementBalance(to);
 
   _update(to, newSupply, '');
   generateEvent(`${itemType} minted to ${to}`);
@@ -104,32 +125,45 @@ export function mintItem(binaryArgs: StaticArray<u8>): void {
 }
 
 /**
- * Edit metadata for a specific NFT (owner only).
+ * Get owner of a token
  */
-export function editMetadata(binaryArgs: StaticArray<u8>): void {
-  onlyOwner();
-
+export function ownerOf(binaryArgs: StaticArray<u8>): StaticArray<u8> {
   const args = new Args(binaryArgs);
   const tokenId = args.nextU256().expect('Token ID missing.');
-  const keyValue = args.nextString().expect('Metadata key-value pair missing.');
+  const ownerKey = TOKEN_OWNER_KEY + tokenId.toString();
+  return Storage.get(stringToBytes(ownerKey));
+}
 
-  const metadataKey = ITEM_TYPE_KEY + tokenId.toString();
-  const currentMetadata = bytesToString(Storage.get(stringToBytes(metadataKey)));
-  const updatedMetadata = updateMetadata(currentMetadata, keyValue);
+/**
+ * Get balance of an address
+ */
+export function balanceOf(binaryArgs: StaticArray<u8>): StaticArray<u8> {
+  const args = new Args(binaryArgs);
+  const owner = args.nextString().expect('Owner address missing.');
+  const balanceKey = BALANCE_KEY + owner;
+  return Storage.getOrDefault(stringToBytes(balanceKey), u256ToBytes(u256.Zero));
+}
 
-  Storage.set(stringToBytes(metadataKey), stringToBytes(updatedMetadata));
-  generateEvent(`Metadata updated for Token#${tokenId}`);
+/**
+ * Utility to increment balance
+ */
+function incrementBalance(owner: string): void {
+  const balanceKey = BALANCE_KEY + owner;
+  const currentBalance = bytesToU256(Storage.getOrDefault(stringToBytes(balanceKey), u256ToBytes(u256.Zero)));
+  Storage.set(stringToBytes(balanceKey), u256ToBytes(currentBalance + u256.One));
 }
 
 /**
  * Retrieve metadata for a specific NFT.
  */
-export function getMetadata(binaryArgs: StaticArray<u8>): StaticArray<u8> {
+export function tokenURI(binaryArgs: StaticArray<u8>): StaticArray<u8> {
   const args = new Args(binaryArgs);
   const tokenId = args.nextU256().expect('Token ID missing.');
-
   const metadataKey = ITEM_TYPE_KEY + tokenId.toString();
-  return Storage.get(stringToBytes(metadataKey));
+  const baseURI = bytesToString(Storage.get(BASE_URI_KEY));
+  const metadata = bytesToString(Storage.get(stringToBytes(metadataKey)));
+  const uri = `${baseURI}/${tokenId.toString()}?${metadata}`;
+  return stringToBytes(uri);
 }
 
 /**
@@ -137,33 +171,4 @@ export function getMetadata(binaryArgs: StaticArray<u8>): StaticArray<u8> {
  */
 export function currentSupply(): StaticArray<u8> {
   return Storage.get(COUNTER_KEY);
-}
-
-/**
- * Utility function to update key-value pairs in metadata with validation.
- */
-function updateMetadata(current: string, update: string): string {
-  const updates = update.split('=');
-  assert(updates.length == 2, 'Invalid key-value format. Use key=value format.');
-
-  const key = updates[0].trim();
-  const value = updates[1].trim();
-  assert(key.length > 0 && value.length > 0, 'Key or value cannot be empty.');
-
-  const metadataParts = current.split(',');
-  let updated = '';
-  let found = false;
-
-  for (let i = 0; i < metadataParts.length; i++) {
-    const part = metadataParts[i];
-    if (part.startsWith(key + '=')) {
-      updated += `${key}=${value},`;
-      found = true;
-    } else {
-      updated += part + ',';
-    }
-  }
-
-  if (!found) updated += `${key}=${value},`;
-  return updated.slice(0, -1); // Remove trailing comma
 }
