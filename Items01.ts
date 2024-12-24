@@ -32,6 +32,8 @@ const BALANCE_KEY = 'BALANCE:';
 const DEFAULT_XP = 0;
 const DEFAULT_MAG = 0;
 const DEFAULT_CONDITION = 100;
+const RARITY_KEY = 'RARITY:';
+
 
 // Limits
 const ITEM_MAX_SUPPLY = u256.fromU32(50000);
@@ -80,8 +82,13 @@ export function supportsInterface(binaryArgs: StaticArray<u8>): StaticArray<u8> 
 /**
  * Generate metadata string.
  */
-function generateMetadata(itemType: string): string {
-  return `${itemType},XP=${DEFAULT_XP},MAG=${DEFAULT_MAG},CONDITION=${DEFAULT_CONDITION}`;
+function generateMetadata(itemType: string, tokenId: u256): string {
+  const rarityKey = RARITY_KEY + tokenId.toString();
+  const rarity = bytesToString(
+    Storage.getOrDefault(stringToBytes(rarityKey), stringToBytes('Undefined'))
+  );
+
+  return `${itemType},XP=${DEFAULT_XP},MAG=${DEFAULT_MAG},CONDITION=${DEFAULT_CONDITION},RARITY=${rarity}`;
 }
 
 /**
@@ -161,9 +168,31 @@ export function tokenURI(binaryArgs: StaticArray<u8>): StaticArray<u8> {
   const tokenId = args.nextU256().expect('Token ID missing.');
   const metadataKey = ITEM_TYPE_KEY + tokenId.toString();
   const baseURI = bytesToString(Storage.get(BASE_URI_KEY));
-  const metadata = bytesToString(Storage.get(stringToBytes(metadataKey)));
+  const metadata = generateMetadata(
+    bytesToString(Storage.get(stringToBytes(metadataKey))),
+    tokenId
+  );
+
   const uri = `${baseURI}/${tokenId.toString()}?${metadata}`;
   return stringToBytes(uri);
+}
+
+
+/**
+ * Set the Rarity for a specific token
+ * Only the owner of the smart contract can call this function.
+ */
+export function setRarity(binaryArgs: StaticArray<u8>): void {
+  onlyOwner(); // Zkontroluje, zda volající je majitel kontraktu
+
+  const args = new Args(binaryArgs);
+  const tokenId = args.nextU256().expect('Token ID missing.');
+  const rarity = args.nextString().expect('Rarity value missing.');
+
+  const rarityKey = RARITY_KEY + tokenId.toString();
+  Storage.set(stringToBytes(rarityKey), stringToBytes(rarity));
+
+  generateEvent(`Rarity for token ${tokenId.toString()} set to ${rarity}`);
 }
 
 /**
