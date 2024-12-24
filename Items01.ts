@@ -6,12 +6,6 @@ import {
   bytesToU256,
 } from '@massalabs/as-types';
 import {
-  _constructor,
-  _update,
-} from './NFT-internals';
-
-import { setOwner, onlyOwner, ownerAddress } from '../utilities/ownership';
-import {
   Storage,
   generateEvent,
   transferCoins,
@@ -19,6 +13,53 @@ import {
 } from '@massalabs/massa-as-sdk';
 import { Context } from '@massalabs/massa-as-sdk';
 import { u256 } from 'as-bignum/assembly';
+
+// Funkce pro získání hodnoty nebo výchozího nastavení
+function getOrDefault(key: StaticArray<u8>, defaultValue: StaticArray<u8>): StaticArray<u8> {
+  const value = Storage.get(key);
+  return value != null ? value : defaultValue;
+}
+
+// Funkce `_constructor` a `_update`
+function _constructor(name: string, symbol: string): void {
+  Storage.set(stringToBytes("NAME"), stringToBytes(name));
+  Storage.set(stringToBytes("SYMBOL"), stringToBytes(symbol));
+}
+
+function _update(to: string, tokenId: u256, metadata: string): void {
+  Storage.set(stringToBytes(`TOKEN_METADATA:${tokenId.toString()}`), stringToBytes(metadata));
+  Storage.set(stringToBytes(`TOKEN_OWNER:${tokenId.toString()}`), stringToBytes(to));
+}
+
+// Funkce `setOwner`, `onlyOwner`, `ownerAddress`
+function setOwner(owner: string): void {
+  Storage.set(stringToBytes("OWNER"), stringToBytes(owner));
+}
+
+function ownerAddress(): string {
+  const owner = Storage.get(stringToBytes("OWNER"));
+  assert(owner != null, "Owner not set.");
+  return bytesToString(owner);
+}
+
+function onlyOwner(): void {
+  const caller = Context.caller().toString();
+  const owner = ownerAddress();
+  assert(caller == owner, "Caller is not the owner.");
+}
+
+// Generování metadat
+function generateMetadata(itemType: string, tokenId: u256): string {
+  const rarityKey = RARITY_KEY + tokenId.toString();
+  const rarity = bytesToString(
+    getOrDefault(stringToBytes(rarityKey), stringToBytes('Undefined'))
+  );
+
+  return `${itemType},XP=${DEFAULT_XP},MAG=${DEFAULT_MAG},CONDITION=${DEFAULT_CONDITION},RARITY=${rarity}`;
+}
+
+// Zbytek kódu (mintItem, balanceOf, incrementBalance, atd.) je upraven podle výše uvedených poznámek.
+
 
 // Constants for keys
 const BASE_URI_KEY = stringToBytes('BASE_URI');
@@ -60,7 +101,8 @@ export function constructor(binaryArgs: StaticArray<u8>): void {
   const baseURI = args.nextString().expect('Base URI missing.');
 
   _constructor(name, symbol);
-  setOwner(new Args().add(Context.caller().toString()).serialize());
+  setOwner(Context.caller().toString());
+
 
   Storage.set(BASE_URI_KEY, stringToBytes(baseURI));
   Storage.set(MAX_SUPPLY_KEY, u256ToBytes(ITEM_MAX_SUPPLY));
@@ -79,17 +121,6 @@ export function supportsInterface(binaryArgs: StaticArray<u8>): StaticArray<u8> 
   return new Args().add(supported).serialize();
 }
 
-/**
- * Generate metadata string.
- */
-function generateMetadata(itemType: string, tokenId: u256): string {
-  const rarityKey = RARITY_KEY + tokenId.toString();
-  const rarity = bytesToString(
-    Storage.getOrDefault(stringToBytes(rarityKey), stringToBytes('Undefined'))
-  );
-
-  return `${itemType},XP=${DEFAULT_XP},MAG=${DEFAULT_MAG},CONDITION=${DEFAULT_CONDITION},RARITY=${rarity}`;
-}
 
 /**
  * Mint a new NFT based on item type.
@@ -100,21 +131,23 @@ export function mintItem(binaryArgs: StaticArray<u8>): void {
   const to = args.nextString().expect('Target address missing.');
 
   const price = ITEM_PRICES.get(itemType);
-  assert(price != null, 'Invalid item type.');
 
-  if (Context.caller().toString() != bytesToString(Storage.get(ownerAddress([])))) {
+  if (Context.caller().toString() != bytesToString(Storage.get(stringToBytes("OWNER")))) {
     assert(Context.transferredCoins() >= price!, 'Not enough coins sent.');
   }
 
   // Increment counter
-  const currentSupply = bytesToU256(Storage.get(COUNTER_KEY));
+  const currentSupply = bytesToU256(
+    getOrDefault(COUNTER_KEY, u256ToBytes(u256.Zero))
+  );
+  
   assert(currentSupply < ITEM_MAX_SUPPLY, 'Max supply reached.');
   const newSupply = currentSupply + u256.One;
   Storage.set(COUNTER_KEY, u256ToBytes(newSupply));
 
   // Store metadata
   const metadataKey = ITEM_TYPE_KEY + newSupply.toString();
-  const metadata = generateMetadata(itemType);
+  const metadata = generateMetadata(itemType, newSupply);
   Storage.set(stringToBytes(metadataKey), stringToBytes(metadata));
 
   // Assign ownership
@@ -127,7 +160,7 @@ export function mintItem(binaryArgs: StaticArray<u8>): void {
 
   // Transfer funds to owner
   if (Context.transferredCoins() > 0) {
-    transferCoins(new Address(ownerAddress([])), Context.transferredCoins());
+    transferCoins(new Address(ownerAddress()), Context.transferredCoins());
   }
 }
 
@@ -148,7 +181,7 @@ export function balanceOf(binaryArgs: StaticArray<u8>): StaticArray<u8> {
   const args = new Args(binaryArgs);
   const owner = args.nextString().expect('Owner address missing.');
   const balanceKey = BALANCE_KEY + owner;
-  return Storage.getOrDefault(stringToBytes(balanceKey), u256ToBytes(u256.Zero));
+  return getOrDefault(stringToBytes(balanceKey), u256ToBytes(u256.Zero));
 }
 
 /**
@@ -156,7 +189,7 @@ export function balanceOf(binaryArgs: StaticArray<u8>): StaticArray<u8> {
  */
 function incrementBalance(owner: string): void {
   const balanceKey = BALANCE_KEY + owner;
-  const currentBalance = bytesToU256(Storage.getOrDefault(stringToBytes(balanceKey), u256ToBytes(u256.Zero)));
+  const currentBalance = bytesToU256(getOrDefault(stringToBytes(balanceKey), u256ToBytes(u256.Zero)));
   Storage.set(stringToBytes(balanceKey), u256ToBytes(currentBalance + u256.One));
 }
 
