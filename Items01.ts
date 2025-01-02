@@ -17,7 +17,11 @@ import { u256 } from 'as-bignum/assembly';
 // Funkce pro získání hodnoty nebo výchozího nastavení
 function getOrDefault(key: StaticArray<u8>, defaultValue: StaticArray<u8>): StaticArray<u8> {
   const value = Storage.get(key);
-  return value != null ? value : defaultValue;
+  return value != null && value.length > 0 ? value : defaultValue;
+}
+
+function deleteValue(key: StaticArray<u8>): void {
+  Storage.set(key, new StaticArray<u8>(0));
 }
 
 // Funkce `_constructor` a `_update`
@@ -37,8 +41,8 @@ function setOwner(owner: string): void {
 }
 
 function ownerAddress(): string {
-  const owner = Storage.get(stringToBytes("OWNER"));
-  assert(owner != null, "Owner not set.");
+  const owner = getOrDefault(stringToBytes("OWNER"), stringToBytes(""));
+  assert(owner.length > 0, "Owner not set.");
   return bytesToString(owner);
 }
 
@@ -58,9 +62,6 @@ function generateMetadata(itemType: string, tokenId: u256): string {
   return `${itemType},XP=${DEFAULT_XP},MAG=${DEFAULT_MAG},CONDITION=${DEFAULT_CONDITION},RARITY=${rarity}`;
 }
 
-// Zbytek kódu (mintItem, balanceOf, incrementBalance, atd.) je upraven podle výše uvedených poznámek.
-
-
 // Constants for keys
 const BASE_URI_KEY = stringToBytes('BASE_URI');
 const COUNTER_KEY = stringToBytes('COUNTER');
@@ -74,7 +75,6 @@ const DEFAULT_XP = 0;
 const DEFAULT_MAG = 0;
 const DEFAULT_CONDITION = 100;
 const RARITY_KEY = 'RARITY:';
-
 
 // Limits
 const ITEM_MAX_SUPPLY = u256.fromU32(50000);
@@ -103,7 +103,6 @@ export function constructor(binaryArgs: StaticArray<u8>): void {
   _constructor(name, symbol);
   setOwner(Context.caller().toString());
 
-
   Storage.set(BASE_URI_KEY, stringToBytes(baseURI));
   Storage.set(MAX_SUPPLY_KEY, u256ToBytes(ITEM_MAX_SUPPLY));
   Storage.set(COUNTER_KEY, u256ToBytes(u256.Zero));
@@ -121,7 +120,6 @@ export function supportsInterface(binaryArgs: StaticArray<u8>): StaticArray<u8> 
   return new Args().add(supported).serialize();
 }
 
-
 /**
  * Mint a new NFT based on item type.
  */
@@ -132,7 +130,7 @@ export function mintItem(binaryArgs: StaticArray<u8>): void {
 
   const price = ITEM_PRICES.get(itemType);
 
-  if (Context.caller().toString() != bytesToString(Storage.get(stringToBytes("OWNER")))) {
+  if (Context.caller().toString() != bytesToString(getOrDefault(stringToBytes("OWNER"), stringToBytes("")))) {
     assert(Context.transferredCoins() >= price!, 'Not enough coins sent.');
   }
 
@@ -171,7 +169,7 @@ export function ownerOf(binaryArgs: StaticArray<u8>): StaticArray<u8> {
   const args = new Args(binaryArgs);
   const tokenId = args.nextU256().expect('Token ID missing.');
   const ownerKey = TOKEN_OWNER_KEY + tokenId.toString();
-  return Storage.get(stringToBytes(ownerKey));
+  return getOrDefault(stringToBytes(ownerKey), new StaticArray<u8>(0));
 }
 
 /**
@@ -200,16 +198,15 @@ export function tokenURI(binaryArgs: StaticArray<u8>): StaticArray<u8> {
   const args = new Args(binaryArgs);
   const tokenId = args.nextU256().expect('Token ID missing.');
   const metadataKey = ITEM_TYPE_KEY + tokenId.toString();
-  const baseURI = bytesToString(Storage.get(BASE_URI_KEY));
+  const baseURI = bytesToString(getOrDefault(BASE_URI_KEY, stringToBytes("")));
   const metadata = generateMetadata(
-    bytesToString(Storage.get(stringToBytes(metadataKey))),
+    bytesToString(getOrDefault(stringToBytes(metadataKey), new StaticArray<u8>(0))),
     tokenId
   );
 
   const uri = `${baseURI}/${tokenId.toString()}?${metadata}`;
   return stringToBytes(uri);
 }
-
 
 /**
  * Set the Rarity for a specific token
@@ -232,5 +229,5 @@ export function setRarity(binaryArgs: StaticArray<u8>): void {
  * Get the current supply of minted NFTs.
  */
 export function currentSupply(): StaticArray<u8> {
-  return Storage.get(COUNTER_KEY);
+  return getOrDefault(COUNTER_KEY, u256ToBytes(u256.Zero));
 }
