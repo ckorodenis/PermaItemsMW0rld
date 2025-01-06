@@ -28,18 +28,31 @@ const COUNTER_KEY = 'COUNTER';
 const ITEM_TYPE_KEY = 'ITEM_METADATA:';
 const TOKEN_OWNER_KEY = 'TOKEN_OWNER:';
 const RARITY_KEY = 'RARITY:';
+const ITEM_PRICE_PREFIX = 'ITEM_PRICE:';
 
 const DEFAULT_XP = 0;
 const DEFAULT_MAG = 0;
 const DEFAULT_CONDITION = 100;
 
 const ITEM_MAX_SUPPLY = u256.fromU32(50000);
-const ITEM_PRICES: Map<string, u64> = new Map<string, u64>();
-ITEM_PRICES.set('TitanRope', 80);
-ITEM_PRICES.set('MagLum', 100);
-ITEM_PRICES.set('NanoShelter', 350);
-ITEM_PRICES.set('CrystalCondenser', 150);
-ITEM_PRICES.set('CrystalSynthesizer', 500);
+
+/**
+ * Set the price for an item type.
+ */
+function setItemPrice(itemType: string, price: u64): void {
+  const key = ITEM_PRICE_PREFIX + itemType;
+  Storage.set(stringToBytes(key), u256ToBytes(u256.fromU64(price)));
+}
+
+/**
+ * Get the price for an item type.
+ */
+function getItemPrice(itemType: string): u64 {
+  const key = ITEM_PRICE_PREFIX + itemType;
+  const priceBytes = Storage.get(stringToBytes(key));
+  assert(priceBytes != null, `Price for item ${itemType} not found.`);
+  return bytesToU256(priceBytes!).toU64();
+}
 
 /**
  * Constructor function to initialize the NFT contract
@@ -51,26 +64,21 @@ export function constructor(_binaryArgs: StaticArray<u8>): void {
   const symbol = args.nextString().expect('Symbol missing.');
   const baseURI = args.nextString().expect('Base URI missing.');
 
-  mrc721Constructor('MW0rldItems1', 'MI1');
-  _setBaseURI(baseURI);                                                  /** Nastavit defaultní URI - výchozí base URI  */
+  mrc721Constructor(name, symbol);
+  _setBaseURI(baseURI); 
   setOwner(Context.caller().toString());
 
   Storage.set(BASE_URI_KEY, stringToBytes(baseURI));
   Storage.set(COUNTER_KEY, u256ToBytes(u256.Zero));
+  
+  // Set initial item prices
+  setItemPrice('TitanRope', 80);
+  setItemPrice('MagLum', 100);
+  setItemPrice('NanoShelter', 350);
+  setItemPrice('CrystalCondenser', 150);
+  setItemPrice('CrystalSynthesizer', 500);
+
   generateEvent('NFT Collection Deployed');
-}
-
-/**
- * Set the base URI for all token IDs
- */
-export function setBaseURI(_args: StaticArray<u8>): void {
-  onlyOwner();
-  const args = new Args(_args);
-  const newBaseUri = args
-    .nextString()
-    .expect('newBaseUri argument is missing or invalid');
-
-  _setBaseURI(newBaseUri);
 }
 
 /**
@@ -81,9 +89,9 @@ export function mintItem(binaryArgs: StaticArray<u8>): void {
   const itemType = args.nextString().expect('Item type missing.');
   const to = args.nextString().expect('Target address missing.');
 
-  const price = ITEM_PRICES.get(itemType);
+  const price = getItemPrice(itemType);
   if (Context.caller().toString() !== ownerAddress()) {
-    assert(Context.transferredCoins() >= price!, 'Not enough coins sent.');
+    assert(Context.transferredCoins() >= price, 'Not enough coins sent.');
   }
 
   const currentSupply = bytesToU256(
@@ -108,6 +116,8 @@ export function mintItem(binaryArgs: StaticArray<u8>): void {
     transferCoins(new Address(ownerAddress()), Context.transferredCoins());
   }
 }
+
+
 
 /**
  * Utility to increment balance
