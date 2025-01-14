@@ -52,7 +52,7 @@ const ITEM_MAX_SUPPLY = u256.fromU32(50000);
  * @param binaryArgs - serialized strings representing the name of the NFT
  *
  * @remarks This is the constructor of the contract. It initializes the NFT collection with default values for symbol, base URI, and owner.
- /
+ */
 export function constructor(binaryArgs: StaticArray<u8>): void {
   assert(isDeployingContract());
   const args = new Args(binaryArgs);
@@ -70,6 +70,12 @@ export function constructor(binaryArgs: StaticArray<u8>): void {
   Storage.set(MAX_SUPPLY_KEY, u256ToBytes(ITEM_MAX_SUPPLY));
   Storage.set(COUNTER_KEY, u256ToBytes(u256.Zero));
 
+  // Log initial setup
+  generateEvent(`NFT Collection name set to: ${name}`);
+  generateEvent(`Default symbol set to: ${symbol}`);
+  generateEvent(`Base URI set to: ${baseURI}`);
+  generateEvent(`Owner set to: ${owner}`);
+
   // Set initial item prices
   setItemPrice('TR', 80);
   setItemPrice('ML', 100);
@@ -80,29 +86,30 @@ export function constructor(binaryArgs: StaticArray<u8>): void {
   generateEvent('NFT COLLECTION IS DEPLOYED');
 }
 
-/*
+/**
  * @param itemType - string representing the type of item
  * @param price - u64 representing the price of the item
  *
  * @remarks Sets the price for a specific item type.
- /
+ */
 function setItemPrice(itemType: string, price: u64): void {
   const key = concatByteArrays(ITEM_PRICE_PREFIX, stringToBytes(itemType));
   Storage.set(key, u64ToBytes(price));
+  generateEvent(`Price for ${itemType} set to ${price}`);
 }
 
-/*
+/**
  * @param itemType - string representing the type of item
  * @returns u64 - price of the item
  *
  * @remarks Gets the price for a specific item type.
- /
+ */
 function getItemPrice(itemType: string): u64 {
   const key = concatByteArrays(ITEM_PRICE_PREFIX, stringToBytes(itemType));
   const priceBytes = Storage.get(key);
   if (priceBytes == null) {
-    generateEvent(Price not found for itemType: ${itemType});
-    assert(false, Price for item ${itemType} not found.);
+    generateEvent(`Price not found for itemType: ${itemType}`);
+    assert(false, `Price for item ${itemType} not found.`);
   }
   return bytesToU64(priceBytes);
 }
@@ -172,7 +179,7 @@ export function tokenURI(binaryArgs: StaticArray<u8>): StaticArray<u8> {
   const metadataBytes = Storage.get(metadataKey);
   const metadata = bytesToString(metadataBytes !== null ? metadataBytes! : new StaticArray<u8>(0));
   
-  const uri = ${baseURI}/${tokenId.toString()}?${metadata};
+  const uri = `${baseURI}/${tokenId.toString()}?${metadata}`;
   return stringToBytes(uri);
 }
 
@@ -194,26 +201,32 @@ function addU256(a: u256, b: u256): u256 {
   return u256.add(a, b);
 }
 
-/*
+/**
  * @param binaryArgs - serialized arguments representing the item type and target address for minting
  *
  * @remarks Mints a new item with specific type to the target address, checking for supply and price.
- /
+ */
 export function mintItem(binaryArgs: StaticArray<u8>): void {
   const args = new Args(binaryArgs);
   const itemType = args.nextString().expect('Item type missing.');
   const to = args.nextString().expect('Target address missing.');
 
   const price = getItemPrice(itemType);
+  generateEvent(`Reading price for ${itemType}: ${getItemPrice(itemType)}`);
+  generateEvent(`Minting process started for item type: ${itemType}, target: ${to}`);
+
   if (Context.caller().toString() !== bytesToString(ownerAddress(new StaticArray<u8>(0)))) {
     assert(Context.transferredCoins() >= price, 'Not enough coins sent.');
+    generateEvent(`Coins transferred by caller: ${Context.transferredCoins()}`);
   }
 
   const currentSupply = bytesToU256(Storage.get(COUNTER_KEY));
   assert(currentSupply < ITEM_MAX_SUPPLY, 'Max supply reached.');
+  generateEvent(`Reading supply: ${bytesToU256(Storage.get(COUNTER_KEY))}`);
 
   const newSupply = addU256(currentSupply, u256.One);
   Storage.set(COUNTER_KEY, u256ToBytes(newSupply));
+  generateEvent(`New supply after minting: ${newSupply}`);
 
   const metadataKey = concatByteArrays(ITEM_TYPE_KEY, stringToBytes(newSupply.toString()));
   const metadata = generateMetadata(itemType, newSupply);
@@ -221,32 +234,34 @@ export function mintItem(binaryArgs: StaticArray<u8>): void {
 
   const ownerKey = concatByteArrays(TOKEN_OWNER_KEY, stringToBytes(newSupply.toString()));
   Storage.set(ownerKey, stringToBytes(to));
-  
+  generateEvent(`Metadata and owner set for token ID: ${newSupply.toString()}`);
+
   incrementBalance(to);
 
   _update(to, newSupply, '');
 
-  generateEvent(${itemType} minted to ${to});
+  generateEvent(`${itemType} minted to ${to}`);
 
   if (Context.transferredCoins() > 0 && Context.caller().toString() !== bytesToString(ownerAddress(new StaticArray<u8>(0)))) {
     transferCoins(new Address(bytesToString(ownerAddress(new StaticArray<u8>(0)))), Context.transferredCoins());
+    generateEvent(`Coins transferred to owner: ${Context.transferredCoins()}`);
   }
 }
 
-/*
+/**
  * @returns StaticArray<u8> - current number of minted tokens
  *
  * @remarks Returns the current supply of tokens.
- /
+ */
 export function currentSupply(): StaticArray<u8> {
   return Storage.get(COUNTER_KEY);
 }
 
-/*
+/**
  * @returns StaticArray<u8> - maximum number of tokens that can be minted
  *
  * @remarks Returns the maximum supply of tokens.
- /
+ */
 export function maxSupply(): StaticArray<u8> {
   return Storage.get(MAX_SUPPLY_KEY);
 }
@@ -255,35 +270,36 @@ export function maxSupply(): StaticArray<u8> {
 
 // Funkce pro update metadat a rarity zůstávají stejné
 
-/*
+/**
  * @param itemType - string representing the type of item
  * @param tokenId - u256 representing the token ID
  * @returns string - generated metadata for the item
  *
  * @remarks Generates metadata for a specific item type and token ID.
- /
+ */
 function generateMetadata(itemType: string, tokenId: u256): string {
   const rarityKey = concatByteArrays(RARITY_KEY, stringToBytes(tokenId.toString()));
   const rarity = bytesToString(Storage.get(rarityKey) || stringToBytes('Undefined'));
-  return ${itemType},XP=${DEFAULT_XP},MAG=${DEFAULT_MAG},CONDITION=${DEFAULT_CONDITION},RARITY=${rarity};
+  return "${itemType},XP=${DEFAULT_XP},MAG=${DEFAULT_MAG},CONDITION=${DEFAULT_CONDITION},RARITY=${rarity}";
+
 }
 
-/*
+/**
  * @param owner - string representing the owner's address
  *
  * @remarks Increments the balance of tokens for an owner.
- /
+ */
 function incrementBalance(owner: string): void {
   const balanceKey = concatByteArrays(BALANCE_KEY, stringToBytes(owner));
   const currentBalance = bytesToU256(Storage.get(balanceKey) || u256ToBytes(u256.Zero));
   Storage.set(balanceKey, u256ToBytes(addU256(currentBalance, u256.One)));
 }
 
-/*
+/**
  * @param binaryArgs - serialized arguments representing the token ID and new XP, MAG, CONDITION values
  *
  * @remarks Updates XP, MAG, and CONDITION metadata for a specific token, only callable by the contract owner.
- /
+ */
 export function updateItemMetadata(binaryArgs: StaticArray<u8>): void {
   onlyOwner();
   const args = new Args(binaryArgs);
@@ -318,18 +334,18 @@ export function updateItemMetadata(binaryArgs: StaticArray<u8>): void {
   }
 
   // Update metadata parts
-  parts[xpIndex] = XP=${newXP};
-  parts[magIndex] = MAG=${newMAG};
-  parts[conditionIndex] = CONDITION=${newCondition};
+  if (xpIndex >= 0) parts[xpIndex] = `XP=${newXP}`;
+  if (magIndex >= 0) parts[magIndex] = `MAG=${newMAG}`;
+  if (conditionIndex >= 0) parts[conditionIndex] = `CONDITION=${newCondition}`;
 
   // Join the parts back together
   const updatedMetadata = parts.join(',');
 
   // Save updated metadata
   Storage.set(metadataKey, stringToBytes(updatedMetadata));
-  generateEvent(Metadata for token ${tokenId.toString()} updated);
+  generateEvent(`Metadata for token ${tokenId.toString()} updated`);
 }
-/*
+/**
  * @param binaryArgs - serialized arguments representing the token ID and new rarity value
  *
  * @remarks Sets the rarity for a specific token ID, only callable by the contract owner.
@@ -342,7 +358,7 @@ export function setRarity(binaryArgs: StaticArray<u8>): void {
 
   const rarityKey = concatByteArrays(RARITY_KEY, stringToBytes(tokenId.toString()));
   Storage.set(rarityKey, stringToBytes(rarity));
-  generateEvent(Rarity for token ${tokenId.toString()} set to ${rarity});
+  generateEvent(`Metadata for token ${tokenId.toString()} updated`);
 }
 
 // Helper function to concatenate two StaticArray<u8>
